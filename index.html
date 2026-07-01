@@ -567,7 +567,7 @@ body{display:flex;flex-direction:column;overflow:hidden;}
     <div class="fg"><label>Name</label><input id="m-name" placeholder="e.g. BPC-157"></div>
     <div class="fg-row"><div class="fg"><label>Source</label><input id="m-src"></div><div class="fg"><label>Status</label><select id="m-status"><option value="active">Active</option><option value="off">Cycle OFF</option><option value="completed">Completed</option><option value="stopped">Stopped</option></select></div></div>
     <div class="fg-row"><div class="fg"><label>Dose</label><input id="m-dose" type="number" step="0.001"></div><div class="fg"><label>Unit</label><select id="m-unit"><option>mcg</option><option>mg</option><option>IU</option><option>mL</option><option>units</option></select></div></div>
-    <div class="fg-row"><div class="fg"><label>Frequency</label><select id="m-freq" onchange="toggleDays()"><option value="daily">Daily</option><option value="5on2off">5 on / 2 off</option><option value="weekly">Weekly</option><option value="eod">Every other day</option><option value="twice_weekly">2-3x/week</option><option value="monthly">Monthly</option></select></div><div class="fg"><label>Time</label><input id="m-time" type="time" value="20:00"></div></div>
+    <div class="fg-row"><div class="fg"><label>Frequency</label><select id="m-freq" onchange="toggleDays()"><option value="daily">Daily</option><option value="custom">Specific days</option><option value="eod">Every other day</option><option value="monthly">Monthly</option></select></div><div class="fg"><label>Time</label><input id="m-time" type="time" value="20:00"></div></div>
     <div class="fg" id="days-pick" style="display:none"><label>Days</label><div class="days-row"><button class="dt" data-day="Sun" onclick="toggleDay(this)">Su</button><button class="dt" data-day="Mon" onclick="toggleDay(this)">Mo</button><button class="dt" data-day="Tue" onclick="toggleDay(this)">Tu</button><button class="dt" data-day="Wed" onclick="toggleDay(this)">We</button><button class="dt" data-day="Thu" onclick="toggleDay(this)">Th</button><button class="dt" data-day="Fri" onclick="toggleDay(this)">Fr</button><button class="dt" data-day="Sat" onclick="toggleDay(this)">Sa</button></div></div>
     <div class="fg-row"><div class="fg"><label>Cycle ON (wks)</label><input id="m-con" type="number" value="0"></div><div class="fg"><label>Cycle OFF (wks)</label><input id="m-coff" type="number" value="0"></div></div>
     <div class="fg-row"><div class="fg"><label>Start date</label><input id="m-start" type="date"></div><div class="fg"><label>Vial size (mg)</label><input id="m-vial" type="number" step="0.1"></div></div>
@@ -790,6 +790,9 @@ body{display:flex;flex-direction:column;overflow:hidden;}
   <div class="sheet-hdr"><h2>⚙ Data & Backup</h2><button class="sheet-close" onclick="closeSheet('sh-settings')">✕</button></div>
   <div class="sheet-body">
     <div class="nb info" style="margin-bottom:14px">Your data is saved in this browser's local storage. Export a backup file regularly to prevent data loss if you clear the browser or switch devices.</div>
+    <div class="sl">iOS Reminders / Calendar</div>
+    <button class="btn btn-p btn-full" style="margin-bottom:6px" onclick="exportICS()">↓ Export schedule (.ics)</button>
+    <div style="font-size:10px;color:var(--mu);line-height:1.5;margin-bottom:14px">Opens in iOS Calendar or Reminders — creates recurring alerts for each active medication.</div>
     <div class="sl">Backup</div>
     <button class="btn btn-p btn-full" style="margin-bottom:10px" onclick="exportData()">↓ Export backup (JSON)</button>
     <button class="btn btn-g btn-full" style="margin-bottom:10px" onclick="importData()">↑ Import backup (JSON)</button>
@@ -1047,7 +1050,13 @@ function switchTab(el) {
 
 // ══ FORECAST ══════════════════════════════════════════════════════════════════
 function dpw(m) {
-  return {daily:7,'5on2off':5,weekly:1,eod:3.5,twice_weekly:2.5,monthly:.25}[m.freq] || 1;
+  if (m.freq === 'daily') return 7;
+  if (m.freq === 'eod') return 3.5;
+  if (m.freq === 'monthly') return 0.25;
+  // custom + legacy day-based freqs
+  const days = m.days || [];
+  if (m.freq === '5on2off') return days.length || 5;
+  return days.length || 1;
 }
 function dvol(m, v) {
   let mg = parseFloat(m.dose) || 0;
@@ -1137,7 +1146,7 @@ function renderDash() {
       <div class="mini-bar" style="background:${bc}"></div>
       <div class="mini-name">${m.name}</div>
       <div class="mini-src">${m.src || ''}</div>
-      <div class="mini-dose">${m.dose} ${m.unit} · ${flbl(m.freq)}</div>
+      <div class="mini-dose">${m.dose} ${m.unit} · ${flbl(m.freq, m.days)}</div>
       ${fc ? `<div class="mini-nums"><span style="color:${fc.dLeft!=null&&fc.dLeft<=5?'var(--dn)':fc.dLeft!=null&&fc.dLeft<=14?'var(--wn)':'var(--ac)'}">${fc.dLeft != null ? fc.dLeft + ' left' : '—'}</span><span style="color:var(--mu)">${fc.fin ? sd(fc.fin) : '—'}</span></div>
       <div class="vol-track" style="margin-top:5px"><div class="vol-fill${fc.pct<20?' d':fc.pct<40?' w':''}" style="width:${fc.pct}%"></div></div>` : ''}
     </div>`;
@@ -1150,10 +1159,12 @@ function todaySched() {
     const dn = new Date().getDay();
     const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dn];
     if (m.freq === 'daily') return true;
-    if (m.freq === '5on2off') return dn !== 0 && dn !== 6;
-    if (m.freq === 'weekly' || m.freq === 'twice_weekly') return (m.days || []).includes(dow);
     if (m.freq === 'eod') { if (!m.start) return true; return Math.floor((Date.now() - new Date(m.start)) / 86400000) % 2 === 0; }
-    return false;
+    if (m.freq === 'monthly') return false;
+    // custom + all legacy day-based freqs
+    const days = m.days || [];
+    if (m.freq === '5on2off') return days.length ? days.includes(dow) : dn !== 0 && dn !== 6;
+    return days.includes(dow);
   });
 }
 
@@ -1206,7 +1217,7 @@ function mcHTML(m) {
         <div><div class="mc-name">${m.name}</div><div class="mc-src">${m.src || ''}</div></div>
         <span class="badge ${sb}">${m.status}</span>
       </div>
-      <div class="mc-meta">${m.dose} ${m.unit} · ${flbl(m.freq)} · ${m.time || '—'}</div>
+      <div class="mc-meta">${m.dose} ${m.unit} · ${flbl(m.freq, m.days)} · ${m.time || '—'}</div>
       <div class="mc-badges">
         ${m.cOn ? `<span class="badge b-wn">${m.cOn}w on/${m.cOff}w off</span>` : ''}
         ${m.start ? `<span class="badge">Started ${m.start}</span>` : ''}
@@ -1226,7 +1237,15 @@ function mcHTML(m) {
 }
 
 function setMF(btn) { mF = btn.dataset.f; document.querySelectorAll('#sc-meds .fb').forEach(b => b.classList.remove('on')); btn.classList.add('on'); renderMeds(); }
-function flbl(f) { return {daily:'Daily','5on2off':'5on/2off',weekly:'Weekly',eod:'EOD',twice_weekly:'2-3x/wk',monthly:'Monthly'}[f] || f; }
+function flbl(f, days) {
+  if (f === 'daily') return 'Daily';
+  if (f === 'eod') return 'EOD';
+  if (f === 'monthly') return 'Monthly';
+  const d = days || [];
+  if (!d.length) return f === '5on2off' ? 'Mon–Fri' : 'Custom';
+  const short = {Sun:'Su',Mon:'Mo',Tue:'Tu',Wed:'We',Thu:'Th',Fri:'Fr',Sat:'Sa'};
+  return d.map(x => short[x] || x).join('/');
+}
 
 function openAddMed(def = null) {
   editMedId = null;
@@ -1265,7 +1284,11 @@ function editMed(id) {
   document.getElementById('m-status').value = m.status;
   document.getElementById('m-dose').value = m.dose;
   document.getElementById('m-unit').value = m.unit;
-  document.getElementById('m-freq').value = m.freq;
+  // Migrate legacy freq values to the unified day-picker model
+  const legacyDays = { '5on2off': ['Mon','Tue','Wed','Thu','Fri'], 'weekly': m.days, 'twice_weekly': m.days };
+  const migratedFreq = legacyDays[m.freq] !== undefined ? 'custom' : m.freq;
+  const migratedDays = legacyDays[m.freq] || m.days || [];
+  document.getElementById('m-freq').value = migratedFreq;
   document.getElementById('m-time').value = m.time || '';
   document.getElementById('m-con').value = m.cOn || 0;
   document.getElementById('m-coff').value = m.cOff || 0;
@@ -1274,7 +1297,7 @@ function editMed(id) {
   document.getElementById('m-reorder').value = m.reorder || 7;
   document.getElementById('m-utbl').value = m.utbl || '';
   document.getElementById('m-notes').value = m.notes || '';
-  document.querySelectorAll('.dt').forEach(d => d.classList.toggle('on', (m.days || []).includes(d.dataset.day)));
+  document.querySelectorAll('.dt').forEach(d => d.classList.toggle('on', migratedDays.includes(d.dataset.day)));
   toggleDays();
   openSheet('sh-med');
 }
@@ -1305,7 +1328,7 @@ function saveMed() {
 }
 
 function delMed(id) { if (!confirm('Delete this medication?')) return; meds = meds.filter(m => m.id !== id); saveAll(); render(); }
-function toggleDays() { const f = document.getElementById('m-freq').value; document.getElementById('days-pick').style.display = (f==='weekly'||f==='twice_weekly') ? '' : 'none'; }
+function toggleDays() { const f = document.getElementById('m-freq').value; document.getElementById('days-pick').style.display = f === 'custom' ? '' : 'none'; }
 function toggleDay(el) { el.classList.toggle('on'); }
 
 // ══ LOG ═══════════════════════════════════════════════════════════════════════
@@ -2328,6 +2351,57 @@ document.querySelectorAll('.overlay').forEach(o => o.addEventListener('click', e
 function fD(d) { return d.toISOString().split('T')[0]; }
 function sd(d) { return d.toLocaleDateString('en-US', {month:'short',day:'numeric'}); }
 function uid() { return Math.random().toString(36).slice(2,8) + Date.now().toString(36); }
+
+// ══ ICS EXPORT ════════════════════════════════════════════════════════════════
+function exportICS() {
+  const active = meds.filter(m => m.status === 'active');
+  if (!active.length) { alert('No active medications to export.'); return; }
+  const DAY_MAP = {Sun:'SU',Mon:'MO',Tue:'TU',Wed:'WE',Thu:'TH',Fri:'FR',Sat:'SA'};
+  const lines = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Subqueue//Peptide Tracker//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH'];
+  const dtNow = fmtICS(new Date());
+  active.forEach(m => {
+    const [h, mi] = (m.time || '20:00').split(':').map(Number);
+    const base = m.start ? new Date(m.start + 'T00:00:00') : new Date();
+    base.setHours(h, mi, 0, 0);
+    let rrule = '';
+    const days = m.days || [];
+    if (m.freq === 'daily') {
+      rrule = 'RRULE:FREQ=DAILY';
+    } else if (m.freq === 'eod') {
+      rrule = 'RRULE:FREQ=DAILY;INTERVAL=2';
+    } else if (m.freq === 'monthly') {
+      rrule = 'RRULE:FREQ=MONTHLY';
+    } else {
+      const byday = (m.freq === '5on2off' && !days.length ? ['Mon','Tue','Wed','Thu','Fri'] : days)
+        .map(d => DAY_MAP[d]).filter(Boolean).join(',');
+      if (byday) rrule = `RRULE:FREQ=WEEKLY;BYDAY=${byday}`;
+    }
+    const desc = `${m.dose} ${m.unit} · ${flbl(m.freq, m.days)}${m.notes ? '\\n' + m.notes.replace(/\n/g,'\\n') : ''}`;
+    lines.push('BEGIN:VEVENT',
+      `UID:${m.id}-sq@subqueue`,
+      `DTSTAMP:${dtNow}`,
+      `DTSTART:${fmtICSLocal(base)}`,
+      'DURATION:PT5M',
+      `SUMMARY:${m.name} — ${m.dose} ${m.unit}`,
+      `DESCRIPTION:${desc}`);
+    if (rrule) lines.push(rrule);
+    lines.push('BEGIN:VALARM','ACTION:DISPLAY',
+      `DESCRIPTION:Time for ${m.name} · ${m.dose} ${m.unit}`,
+      'TRIGGER:-PT15M','END:VALARM','END:VEVENT');
+  });
+  lines.push('END:VCALENDAR');
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `subqueue-${fD(new Date())}.ics`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(a.href);
+}
+function fmtICS(d) { return d.toISOString().replace(/[-:]/g,'').split('.')[0]+'Z'; }
+function fmtICSLocal(d) {
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}00`;
+}
 
 // ══ SERVICE WORKER ════════════════════════════════════════════════════════════
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
